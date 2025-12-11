@@ -1,14 +1,10 @@
 import gradio as gr
 import torch
-# WE USE THE STANDARD PIPELINE CLASS - IT IS BULLETPROOF
 from diffusers import DiffusionPipeline
 import os
 import gc
 
 # --- Configuration ---
-# ⚠️ CRITICAL: Ensure this ID is correct. 
-# If "Tongyi-MAI/Z-Image-Turbo" fails, try "black-forest-labs/FLUX.1-schnell" 
-# or the specific ID provided by the Z-Image release.
 MODEL_ID = "Tongyi-MAI/Z-Image-Turbo" 
 
 pipe = None
@@ -18,46 +14,46 @@ def load_model():
     if pipe is None:
         print(f"⏳ Loading Model: {MODEL_ID}...")
         try:
-            # 1. Use the Universal 'DiffusionPipeline' class
+            # 1. Load normally (no device_map yet)
             pipe = DiffusionPipeline.from_pretrained(
                 MODEL_ID,
                 torch_dtype=torch.bfloat16,
-                trust_remote_code=True,
-                device_map="balanced" # Dual GPU
+                trust_remote_code=True
             )
             
-            # 2. Optimizations
-            # We check if the model supports these before calling them
+            # 2. THE FIX: Enable CPU Offload
+            # This keeps the heavy model in your 30GB RAM and streams it to the GPU.
+            # It prevents the 0% freeze you are seeing.
+            pipe.enable_model_cpu_offload()
+            
+            # 3. Enable Tiling (Prevents memory spikes)
             if hasattr(pipe, 'enable_vae_tiling'):
                 pipe.enable_vae_tiling()
             
-            print("✅ Model Loaded Successfully!")
-            return "✅ Ready"
-        except OSError:
-            return "❌ Error: Model ID not found on HuggingFace. Please check the spelling."
+            print("✅ Model Loaded in SAFE MODE!")
+            return "✅ Ready (Safe Mode)"
         except Exception as e:
-            return f"❌ Error: {str(e)}"
+            return f"❌ Load Error: {str(e)}"
     return "✅ Ready"
 
 def generate(prompt, width, height, steps, seed, num_images):
     global pipe
     if pipe is None:
-        status = load_model()
-        if "Error" in status:
-            return None, status
+        load_model()
     
+    # Clear memory to prevent "ghost" data from the previous crash
     gc.collect()
     torch.cuda.empty_cache()
     
     if seed == -1:
         seed = torch.randint(0, 2**32, (1,)).item()
     
+    # Use CPU generator for reproducibility
     generator = torch.Generator("cpu").manual_seed(int(seed))
     
     print(f"🎨 Generating {num_images} image(s)...")
     
     try:
-        # Standard Inference Call
         images = pipe(
             prompt=prompt,
             width=width,
@@ -75,7 +71,7 @@ def generate(prompt, width, height, steps, seed, num_images):
 custom_css = "body {background-color: #0b0f19;}"
 
 with gr.Blocks(theme='Yntec/HaleyCH_Theme_Orange', css=custom_css, title="Z-Image-Turbo") as demo:
-    gr.Markdown("# ⚡ Z-Image-Turbo")
+    gr.Markdown("# ⚡ Z-Image-Turbo (Safe Mode)")
     
     with gr.Row():
         with gr.Column(scale=4):

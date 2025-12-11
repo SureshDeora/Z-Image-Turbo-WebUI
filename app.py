@@ -1,50 +1,50 @@
 import gradio as gr
 import torch
-from diffusers import AutoPipelineForTextToImage
+# WE USE THE STANDARD PIPELINE CLASS - IT IS BULLETPROOF
+from diffusers import DiffusionPipeline
 import os
 import gc
 
 # --- Configuration ---
-# Using the ID you likely intended. 
-# If this is a specific ModelScope model, we might need 'snapshot_download',
-# but let's try the HF ID first if it exists, or fallback to the known working turbo method.
+# ⚠️ CRITICAL: Ensure this ID is correct. 
+# If "Tongyi-MAI/Z-Image-Turbo" fails, try "black-forest-labs/FLUX.1-schnell" 
+# or the specific ID provided by the Z-Image release.
 MODEL_ID = "Tongyi-MAI/Z-Image-Turbo" 
-
-# NOTE: If "Tongyi-MAI/Z-Image-Turbo" is not the exact HF ID, 
-# you might be referring to "alibaba-pai/pai-diffusion-general-large-zh" or similar.
-# However, assuming the files exist at that ID or a local path:
 
 pipe = None
 
 def load_model():
     global pipe
     if pipe is None:
-        print(f"⏳ Loading Z-Image-Turbo...")
+        print(f"⏳ Loading Model: {MODEL_ID}...")
         try:
-            # We use AutoPipeline. It is smart enough to handle SDXL-Turbo, Flux, etc.
-            # We REMOVED the fake 'ProxyUNet2DConditionModel' import.
-            pipe = AutoPipelineForTextToImage.from_pretrained(
+            # 1. Use the Universal 'DiffusionPipeline' class
+            pipe = DiffusionPipeline.from_pretrained(
                 MODEL_ID,
                 torch_dtype=torch.bfloat16,
-                trust_remote_code=True,  # Crucial for new/custom models
-                device_map="balanced"
+                trust_remote_code=True,
+                device_map="balanced" # Dual GPU
             )
             
-            # Optimizations
+            # 2. Optimizations
+            # We check if the model supports these before calling them
             if hasattr(pipe, 'enable_vae_tiling'):
                 pipe.enable_vae_tiling()
             
-            print("✅ Model Loaded!")
-            return "✅ Model Ready"
+            print("✅ Model Loaded Successfully!")
+            return "✅ Ready"
+        except OSError:
+            return "❌ Error: Model ID not found on HuggingFace. Please check the spelling."
         except Exception as e:
-            # Fallback for debugging if the ID is wrong
-            return f"❌ Load Error: {str(e)}"
-    return "✅ Model Already Loaded"
+            return f"❌ Error: {str(e)}"
+    return "✅ Ready"
 
 def generate(prompt, width, height, steps, seed, num_images):
     global pipe
     if pipe is None:
-        load_model()
+        status = load_model()
+        if "Error" in status:
+            return None, status
     
     gc.collect()
     torch.cuda.empty_cache()
@@ -57,6 +57,7 @@ def generate(prompt, width, height, steps, seed, num_images):
     print(f"🎨 Generating {num_images} image(s)...")
     
     try:
+        # Standard Inference Call
         images = pipe(
             prompt=prompt,
             width=width,
@@ -68,12 +69,10 @@ def generate(prompt, width, height, steps, seed, num_images):
         ).images
         return images, seed
     except Exception as e:
-        return None, f"Error: {e}"
+        return None, f"Runtime Error: {e}"
 
 # --- Gradio UI ---
-custom_css = """
-#run-btn {background-color: #D32F2F; color: white;} 
-"""
+custom_css = "body {background-color: #0b0f19;}"
 
 with gr.Blocks(theme='Yntec/HaleyCH_Theme_Orange', css=custom_css, title="Z-Image-Turbo") as demo:
     gr.Markdown("# ⚡ Z-Image-Turbo")
@@ -88,14 +87,13 @@ with gr.Blocks(theme='Yntec/HaleyCH_Theme_Orange', css=custom_css, title="Z-Imag
                 num_images = gr.Slider(1, 4, value=1, step=1, label="Batch Size")
                 seed = gr.Number(label="Seed", value=-1)
 
-            btn_run = gr.Button("🚀 Generate", elem_id="run-btn", size="lg")
-            status = gr.Textbox(label="Status", value="Idle", interactive=False)
+            btn_run = gr.Button("🚀 Generate", variant="primary", size="lg")
+            status = gr.Textbox(label="System Status", value="Idle", interactive=False)
 
         with gr.Column(scale=6):
-            gallery = gr.Gallery(label="Results", columns=2, height="auto")
-            seed_out = gr.Number(label="Seed")
+            gallery = gr.Gallery(label="Output", columns=2, height="auto")
+            seed_out = gr.Number(label="Seed Used")
 
-    demo.load(fn=load_model, outputs=status)
     btn_run.click(fn=generate, inputs=[prompt, width, height, steps, seed, num_images], outputs=[gallery, seed_out])
 
 if __name__ == "__main__":

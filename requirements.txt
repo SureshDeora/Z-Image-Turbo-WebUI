@@ -5,4 +5,4 @@ gradio
 torch
 sentencepiece
 protobuf
-peft
+peft>=0.17.0
